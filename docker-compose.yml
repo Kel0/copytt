@@ -1,0 +1,18 @@
+services:
+  copytt:
+    build: .
+    image: copytt:latest
+    container_name: copytt
+    env_file: .env
+    environment:
+      SHADOW_DB_PATH: /data/shadow.db
+      WEB_HOST: 0.0.0.0
+      WEB_PORT: 47821
+    ports:
+      - "47821:47821"
+    volumes:
+      - copytt-data:/data
+    restart: unless-stopped
+
+volumes:
+  copytt-data:
