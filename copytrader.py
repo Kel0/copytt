@@ -192,8 +192,8 @@ def reconcile_once(ctx: "Ctx", reason: str) -> None:
 
             # Mark-to-market the shadow portfolio every reconcile.
             shadow_total = ctx.shadow.snapshot(mids)
-            log.info("shadow PnL: $%+.4f (realized=$%+.4f)",
-                     shadow_total, ctx.shadow.realized)
+            log.info("shadow PnL: $%+.4f  (realized=$%+.4f  fees=$%.4f)",
+                     shadow_total, ctx.shadow.realized, ctx.shadow.fees)
         except Exception as e:
             log.exception("reconcile error: %s", e)
 

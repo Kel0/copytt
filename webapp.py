@@ -50,8 +50,9 @@ INDEX_HTML = """
     font-family: -apple-system, system-ui, "Segoe UI", sans-serif; }
   h1 { margin: 0 0 4px; font-size: 22px; }
   .sub { color: var(--muted); margin-bottom: 24px; font-size: 13px; }
-  .grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px;
+  .grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 16px;
     margin-bottom: 24px; }
+  @media (max-width: 900px) { .grid { grid-template-columns: repeat(2, 1fr); } }
   .card { background: var(--card); border: 1px solid var(--border);
     border-radius: 8px; padding: 16px; }
   .card .label { color: var(--muted); font-size: 12px; text-transform: uppercase;
@@ -78,9 +79,10 @@ INDEX_HTML = """
   <div class="sub">Auto-refresh every 10s · reads shadow.db</div>
 
   <div class="grid">
-    <div class="card"><div class="label">Total PnL</div><div class="value" id="total">—</div></div>
+    <div class="card"><div class="label">Total PnL (net of fees)</div><div class="value" id="total">—</div></div>
     <div class="card"><div class="label">Realized</div><div class="value" id="realized">—</div></div>
     <div class="card"><div class="label">Unrealized</div><div class="value" id="unrealized">—</div></div>
+    <div class="card"><div class="label">Fees Paid</div><div class="value" id="fees">—</div></div>
     <div class="card"><div class="label">Shadow Fills</div><div class="value" id="fillcount">—</div></div>
   </div>
 
@@ -100,7 +102,7 @@ INDEX_HTML = """
   <div class="panel">
     <h2>Recent shadow fills</h2>
     <table id="fills-table">
-      <thead><tr><th>Time</th><th>Coin</th><th>Side</th><th class="num">Size</th><th class="num">Price</th><th class="num">Notional</th></tr></thead>
+      <thead><tr><th>Time</th><th>Coin</th><th>Side</th><th class="num">Size</th><th class="num">Price</th><th class="num">Notional</th><th class="num">Fee</th></tr></thead>
       <tbody></tbody>
     </table>
   </div>
@@ -116,12 +118,26 @@ function initChart(snaps) {
   chart = new Chart(ctx, {
     type: "line",
     data: {
-      datasets: [{
-        label: "Total PnL",
-        data: snaps.map(s => ({x: s.ts, y: s.total})),
-        borderColor: "#58a6ff", backgroundColor: "rgba(88,166,255,0.1)",
-        borderWidth: 2, fill: true, tension: 0.2, pointRadius: 0,
-      }],
+      datasets: [
+        {
+          label: "Net PnL (after fees)",
+          data: snaps.map(s => ({x: s.ts, y: s.total})),
+          borderColor: "#58a6ff", backgroundColor: "rgba(88,166,255,0.1)",
+          borderWidth: 2, fill: true, tension: 0.2, pointRadius: 0,
+        },
+        {
+          label: "Gross PnL (pre-fees)",
+          data: snaps.map(s => ({x: s.ts, y: s.realized + s.unrealized})),
+          borderColor: "#3fb950", borderWidth: 1.5, borderDash: [4, 4],
+          fill: false, tension: 0.2, pointRadius: 0,
+        },
+        {
+          label: "Cumulative fees",
+          data: snaps.map(s => ({x: s.ts, y: -s.fees})),
+          borderColor: "#f85149", borderWidth: 1.5, borderDash: [2, 4],
+          fill: false, tension: 0.2, pointRadius: 0,
+        },
+      ],
     },
     options: {
       responsive: true, maintainAspectRatio: false,
@@ -130,7 +146,7 @@ function initChart(snaps) {
         y: { ticks: { color: "#8b949e", callback: v => "$" + v.toFixed(2) },
              grid: { color: "#21262d" } },
       },
-      plugins: { legend: { display: false } },
+      plugins: { legend: { labels: { color: "#8b949e" } } },
     },
   });
 }
@@ -142,7 +158,7 @@ async function refresh() {
     fetch("/api/positions").then(r => r.json()),
   ]);
 
-  const last = snaps[snaps.length - 1] || {realized: 0, unrealized: 0, total: 0};
+  const last = snaps[snaps.length - 1] || {realized: 0, unrealized: 0, total: 0, fees: 0};
   const set = (id, v) => {
     const el = document.getElementById(id);
     el.textContent = fmt(v);
@@ -151,6 +167,10 @@ async function refresh() {
   set("total", last.total);
   set("realized", last.realized);
   set("unrealized", last.unrealized);
+  // Fees always shown as a cost (negative).
+  const feesEl = document.getElementById("fees");
+  feesEl.textContent = "-$" + (last.fees || 0).toFixed(4);
+  feesEl.className = "value neg";
   document.getElementById("fillcount").textContent = fills.length;
 
   initChart(snaps);
@@ -179,7 +199,8 @@ async function refresh() {
       const tr = document.createElement("tr");
       tr.innerHTML = `<td>${t}</td><td>${f.coin}</td><td class="${sideClass}">${f.side}</td>` +
                      `<td class="num">${f.size.toFixed(6)}</td><td class="num">$${f.price.toFixed(4)}</td>` +
-                     `<td class="num">$${f.notional.toFixed(2)}</td>`;
+                     `<td class="num">$${f.notional.toFixed(2)}</td>` +
+                     `<td class="num neg">-$${(f.fee || 0).toFixed(4)}</td>`;
       fillBody.appendChild(tr);
     }
   }
@@ -201,11 +222,12 @@ def index():
 @app.get("/api/snapshots")
 def snapshots():
     rows = q(
-        "SELECT ts, realized_pnl, unrealized_pnl, total_pnl "
+        "SELECT ts, realized_pnl, unrealized_pnl, total_pnl, fees_paid "
         "FROM shadow_snapshots ORDER BY ts ASC"
     )
     return jsonify([
-        {"ts": r[0] * 1000, "realized": r[1], "unrealized": r[2], "total": r[3]}
+        {"ts": r[0] * 1000, "realized": r[1], "unrealized": r[2],
+         "total": r[3], "fees": r[4]}
         for r in rows
     ])
 
@@ -213,12 +235,12 @@ def snapshots():
 @app.get("/api/fills")
 def fills():
     rows = q(
-        "SELECT ts, coin, side, size, price, notional "
+        "SELECT ts, coin, side, size, price, notional, fee "
         "FROM shadow_fills ORDER BY id DESC LIMIT 200"
     )
     return jsonify([
         {"ts": r[0] * 1000, "coin": r[1], "side": r[2],
-         "size": r[3], "price": r[4], "notional": r[5]}
+         "size": r[3], "price": r[4], "notional": r[5], "fee": r[6]}
         for r in rows
     ])
 
