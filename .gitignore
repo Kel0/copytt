@@ -1,0 +1,10 @@
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+.env
+shadow.db
+shadow.db-journal
+.DS_Store
+.idea/
+.vscode/
